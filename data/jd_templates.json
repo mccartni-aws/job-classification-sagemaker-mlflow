@@ -1,0 +1,86 @@
+{
+    "Software Engineer": [
+        "Seeking a talented Software Engineer to design, develop, and maintain software solutions. Responsibilities: coding, testing, debugging. Experience with Python and cloud platforms needed.",
+        "Join our team as a Software Engineer. Collaborate to deliver high-quality software. Proficiency in Java and Agile required.",
+        "Full-stack Software Engineer wanted for innovative projects. Must be skilled in JavaScript, React, Node.js, and database technologies.",
+        "We are hiring a Backend Software Engineer specializing in microservices architecture and RESTful APIs. Familiarity with Go or Rust is a plus.",
+        "Mobile App Developer (Software Engineer) needed to build and enhance iOS and Android applications. Swift/Kotlin skills essential."
+    ],
+    "Data Scientist": [
+        "Looking for a Data Scientist to analyze datasets, build predictive models, and provide insights. Skills: Python, R, SQL, ML algorithms.",
+        "Data Scientist to work on challenging problems: data mining, statistical analysis, model deployment. PhD or MS in quantitative field preferred.",
+        "Junior Data Scientist needed to support senior staff. Will assist in data cleaning, feature engineering, and running experiments.",
+        "Senior Data Scientist to lead projects in natural language processing (NLP) and computer vision. Deep learning framework experience (TensorFlow/PyTorch) required.",
+        "Data Scientist, Business Intelligence, sought to create dashboards, reports, and perform ad-hoc analyses to drive business decisions. SQL and Tableau/PowerBI proficiency needed."
+    ],
+    "Product Manager": [
+        "Experienced Product Manager to define product vision, strategy, and roadmap. Work with engineering, design, and marketing.",
+        "Seeking a Product Manager to lead product discovery, user research, and competitive analysis. Strong communication skills vital.",
+        "Associate Product Manager to gather requirements, write user stories, and manage product backlog. Agile experience a plus.",
+        "Technical Product Manager with a background in SaaS and API products. Responsible for defining technical requirements and working closely with engineering teams.",
+        "Growth Product Manager focused on user acquisition, activation, and retention strategies. Data-driven with A/B testing experience."
+    ],
+    "Sales Representative": [
+        "Dynamic Sales Representative to identify new business opportunities and close deals. Proven track record in B2B sales preferred.",
+        "Inside Sales Representative to manage leads, conduct product demos, and achieve sales quotas. Excellent communication and CRM skills required.",
+        "Field Sales Representative to build relationships with key clients and expand market share in a designated territory. Travel required.",
+        "Account Executive (Sales Representative) focused on enterprise clients. Experience with complex sales cycles and solution selling.",
+        "Sales Development Representative (SDR) to generate qualified leads through outbound prospecting and cold calling."
+    ],
+    "Marketing Specialist": [
+        "Creative Marketing Specialist to develop and execute marketing campaigns across multiple channels. Digital marketing expertise essential.",
+        "Content Marketing Specialist to create engaging blog posts, articles, social media content, and email newsletters. SEO knowledge a plus.",
+        "Digital Marketing Specialist with experience in PPC, SEO, SEM, and social media advertising. Google Ads and Analytics certified preferred.",
+        "Product Marketing Specialist to develop go-to-market strategies, create sales enablement materials, and conduct market research.",
+        "Events Marketing Specialist to plan and execute webinars, trade shows, and conferences. Strong organizational skills needed."
+    ],
+    "HR Manager": [
+        "Experienced HR Manager to oversee all aspects of human resources, including recruitment, employee relations, and compliance.",
+        "HR Generalist (reporting to HR Manager) to support daily HR functions, including onboarding, benefits administration, and HRIS management.",
+        "Recruitment Manager (HR) to lead talent acquisition efforts, develop sourcing strategies, and manage the hiring process.",
+        "Compensation and Benefits Manager (HR) to design and administer competitive compensation and benefits programs.",
+        "HR Business Partner to align HR strategies with business objectives and provide guidance to management on HR-related matters."
+    ],
+    "UX Designer": [
+        "Talented UX Designer to create intuitive and user-centered designs for web and mobile applications. Portfolio required.",
+        "UI/UX Designer to craft visually appealing and easy-to-use interfaces. Proficiency in Figma, Sketch, or Adobe XD expected.",
+        "Senior UX Designer to lead design projects, mentor junior designers, and establish design best practices. Strong understanding of user research methodologies.",
+        "Interaction Designer (UX) focused on creating engaging and effective user flows and interactive prototypes.",
+        "UX Researcher to conduct user interviews, usability testing, and surveys to inform design decisions."
+    ],
+    "DevOps Engineer": [
+        "Skilled DevOps Engineer to automate and streamline our operations and processes. Experience with CI/CD, IaC (Terraform/CloudFormation), and containerization (Docker/Kubernetes).",
+        "Cloud DevOps Engineer with expertise in AWS or Azure services. Responsible for building and maintaining scalable and resilient cloud infrastructure.",
+        "Site Reliability Engineer (SRE / DevOps) to ensure the reliability, performance, and availability of our production systems. Monitoring and incident response experience.",
+        "DevOps Engineer focused on security (DevSecOps). Implementing security best practices throughout the software development lifecycle.",
+        "Junior DevOps Engineer to assist with infrastructure automation, deployment pipelines, and system monitoring tasks."
+    ],
+    "Business Analyst": [
+        "Detail-oriented Business Analyst to gather and document business requirements, analyze processes, and propose solutions.",
+        "IT Business Analyst to bridge the gap between business stakeholders and technical teams. Experience with software development projects.",
+        "Data Business Analyst to analyze business data, identify trends, and provide insights to support strategic decision-making. SQL and data visualization skills.",
+        "Senior Business Analyst to lead complex projects, facilitate workshops, and manage stakeholder expectations. Strong analytical and problem-solving skills.",
+        "Agile Business Analyst to work within a Scrum team, create user stories, and support product backlog refinement."
+    ],
+    "Accountant": [
+        "Qualified Accountant to manage financial records, prepare financial statements, and ensure compliance with accounting standards. CPA preferred.",
+        "Staff Accountant to assist with month-end close, account reconciliations, and general ledger maintenance.",
+        "Senior Accountant to handle complex accounting tasks, mentor junior staff, and support financial reporting. Strong GAAP knowledge.",
+        "Cost Accountant to analyze manufacturing costs, track inventory, and develop cost control measures.",
+        "Tax Accountant to prepare tax returns, conduct tax research, and ensure compliance with tax regulations."
+    ],
+    "Customer Support Agent": [
+        "Friendly Customer Support Agent to assist customers with inquiries, resolve issues, and provide excellent service via phone, email, and chat.",
+        "Technical Support Agent (Customer Support) to troubleshoot technical problems and guide users through solutions. Patience and clear communication essential.",
+        "Bilingual Customer Support Agent (e.g., English/Spanish) to support a diverse customer base.",
+        "Tier 2 Customer Support Agent to handle escalated customer issues and provide in-depth technical assistance.",
+        "Customer Success Agent (Proactive Support) to onboard new clients, ensure product adoption, and build long-term relationships."
+    ],
+    "Operations Manager": [
+        "Experienced Operations Manager to oversee daily operations, improve efficiency, and manage resources effectively. Strong leadership skills.",
+        "Logistics Operations Manager to manage supply chain, inventory, and transportation activities. Experience with WMS/TMS systems.",
+        "Manufacturing Operations Manager to lead production processes, ensure quality control, and optimize plant performance.",
+        "Retail Operations Manager to oversee store operations, staff management, and customer service standards across multiple locations.",
+        "Business Operations Manager to streamline internal processes, manage projects, and support cross-functional initiatives."
+    ]
+}
