@@ -60,7 +60,8 @@ echo "-------------------------------------------------------------"
 # --- Execute the Python script ---
 # Assuming generate_and_upload_raw_data.py is in the same directory as this script
 # If not, adjust the path to the python script.
-PYTHON_SCRIPT_PATH="scripts/python/generate_and_upload_raw_data.py" 
+# PYTHON_SCRIPT_PATH="scripts/python/generate_and_upload_raw_data.py" 
+PYTHON_SCRIPT_PATH="scripts/python/generate_and_upload_raw_data_latest.py"
 
 if [ ! -f "$PYTHON_SCRIPT_PATH" ]; then
     echo "Error: Python script '$PYTHON_SCRIPT_PATH' not found."
