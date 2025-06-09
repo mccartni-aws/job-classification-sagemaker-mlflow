@@ -5,6 +5,8 @@ import random
 import time
 import boto3
 import sagemaker
+import time
+from botocore.exceptions import ClientError
 
 # --- Configuration for Data Generation ---
 # This list still defines which categories we process.
@@ -128,29 +130,72 @@ def generate_raw_data(
     print(f"Generating raw data for categories: {categories_list}")
     print(f"Languages: {languages}")
     print(f"JDs per category per language: {num_jds_per_category_lang}")
+    print(f"Target AWS region: {aws_region}")
 
+    # UPDATED: Better translation client initialization
     translate_client = None
-    if any(lang != "en" for lang in languages): # Only init client if non-English needed
+    if any(lang != "en" for lang in languages):
         try:
-            translate_client = boto3.client(service_name='translate', region_name=aws_region, use_ssl=True)
-            print(f"Amazon Translate client initialized for region: {aws_region}")
+            translate_client = boto3.client('translate', region_name=aws_region)
+            
+            # Test translation capability
+            test_response = translate_client.translate_text(
+                Text="Test",
+                SourceLanguageCode='en',
+                TargetLanguageCode='fr'
+            )
+            print(f"✅ Translation test successful: 'Test' -> '{test_response['TranslatedText']}'")
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'AccessDeniedException':
+                print(f"❌ AWS Translate permission denied. Please check IAM permissions.")
+            elif error_code == 'UnsupportedLanguagePairException':
+                print(f"❌ Translation not supported in region {aws_region}")
+            else:
+                print(f"❌ AWS Translate error: {e}")
+            
+            # Try alternative region
+            print("Trying us-east-1 as fallback region...")
+            try:
+                translate_client = boto3.client('translate', region_name='us-east-1')
+                test_response = translate_client.translate_text(
+                    Text="Test", SourceLanguageCode='en', TargetLanguageCode='fr'
+                )
+                print(f"✅ Fallback region works: 'Test' -> '{test_response['TranslatedText']}'")
+                aws_region = 'us-east-1'
+            except Exception as e2:
+                print(f"❌ Fallback region also failed: {e2}")
+                translate_client = None
+                
         except Exception as e:
-            print(f"Error initializing Amazon Translate client: {e}. Non-English JDs will be tagged English text.")
+            print(f"❌ Failed to initialize translate client: {e}")
+            translate_client = None
+
+    # Track translation statistics
+    translation_stats = {
+        "attempted": 0,
+        "successful": 0, 
+        "failed": 0,
+        "error_types": {}
+    }
 
     for category in categories_list:
+        # Your existing JD generation logic
         num_base_templates_for_cat = len(sample_jd_templates.get(category, []))
         if num_base_templates_for_cat == 0:
-            print(f"    WARNING: No templates found for category '{category}' in jd_templates.json. Generating generic JDs.")
-            variations_needed = num_jds_per_category_lang # each will be a generic one
+            print(f"    WARNING: No templates found for category '{category}'. Generating generic JDs.")
+            variations_needed = num_jds_per_category_lang
         else:
             variations_needed = (num_jds_per_category_lang // num_base_templates_for_cat) + 1
         
         base_jds_for_category_en = generate_jd_for_category(category, sample_jd_templates, num_variations_per_template=variations_needed)
         
         if not base_jds_for_category_en:
-            print(f"    WARNING: No base JDs generated for category '{category}' after variation. Skipping.")
+            print(f"    WARNING: No base JDs generated for category '{category}'. Skipping.")
             continue
-        random.shuffle(base_jds_for_category_en) # Shuffle to pick different ones if we need fewer than generated
+            
+        random.shuffle(base_jds_for_category_en)
 
         for lang_code in languages:
             print(f"  Processing Category: '{category}', Language: '{lang_code}'")
@@ -161,31 +206,79 @@ def generate_raw_data(
                     break
 
                 final_jd_text_for_lang = jd_text_en
+                
                 if lang_code != "en" and translate_client:
-                    try:
-                        # Small delay if making many calls in rapid succession
-                        if jd_count_for_lang_category > 0 and jd_count_for_lang_category % 10 == 0 : time.sleep(0.2)
-
-                        response = translate_client.translate_text(
-                            Text=jd_text_en,
-                            SourceLanguageCode='en',
-                            TargetLanguageCode=lang_code
-                        )
-                        final_jd_text_for_lang = response['TranslatedText']
-                    except Exception as e:
-                        print(f"    WARNING: Error translating to '{lang_code}' for category '{category}': {e}")
-                        final_jd_text_for_lang = f"[{lang_code.upper()}_UNTRANSLATED] {jd_text_en}" # Mark as untranslated
+                    translation_stats["attempted"] += 1
+                    
+                    # UPDATED: Robust translation with retries
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            # Add small delay to avoid rate limiting
+                            if translation_stats["attempted"] > 1:
+                                time.sleep(0.2)
+                            
+                            response = translate_client.translate_text(
+                                Text=jd_text_en,
+                                SourceLanguageCode='en',
+                                TargetLanguageCode=lang_code
+                            )
+                            final_jd_text_for_lang = response['TranslatedText']
+                            translation_stats["successful"] += 1
+                            break  # Success, exit retry loop
+                            
+                        except ClientError as e:
+                            error_code = e.response['Error']['Code']
+                            
+                            if error_code == 'ThrottlingException' and attempt < max_retries - 1:
+                                # Rate limit, wait longer and retry
+                                wait_time = (2 ** attempt) * 2  # Exponential backoff: 2s, 4s, 8s
+                                print(f"    Rate limited, waiting {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                # Other error or max retries reached
+                                error_msg = f"{error_code}: {str(e)}"
+                                translation_stats["error_types"][error_msg] = translation_stats["error_types"].get(error_msg, 0) + 1
+                                final_jd_text_for_lang = f"[{lang_code.upper()}_FAILED_{error_code}] {jd_text_en}"
+                                translation_stats["failed"] += 1
+                                break
+                                
+                        except Exception as e:
+                            error_msg = f"UnknownError: {str(e)}"
+                            translation_stats["error_types"][error_msg] = translation_stats["error_types"].get(error_msg, 0) + 1
+                            final_jd_text_for_lang = f"[{lang_code.upper()}_ERROR] {jd_text_en}"
+                            translation_stats["failed"] += 1
+                            break
+                            
                 elif lang_code != "en" and not translate_client:
-                    final_jd_text_for_lang = f"[{lang_code.upper()}_NO_TRANSLATE_CLIENT] {jd_text_en}"
+                    final_jd_text_for_lang = f"[{lang_code.upper()}_NO_CLIENT] {jd_text_en}"
 
                 all_raw_data.append({
                     job_desc_col: final_jd_text_for_lang,
-                    category_col: category
+                    category_col: category,
+                    "source_language": "en",
+                    "target_language": lang_code
                 })
                 jd_count_for_lang_category += 1
             
             print(f"    Generated {jd_count_for_lang_category} JDs for Category: '{category}', Language: '{lang_code}'")
 
+    # Print translation statistics
+    print(f"\n=== Translation Statistics ===")
+    print(f"Translation attempts: {translation_stats['attempted']}")
+    print(f"Successful: {translation_stats['successful']}")
+    print(f"Failed: {translation_stats['failed']}")
+    
+    if translation_stats['successful'] > 0:
+        success_rate = (translation_stats['successful'] / translation_stats['attempted']) * 100
+        print(f"Success rate: {success_rate:.1f}%")
+    
+    if translation_stats['error_types']:
+        print("\nError breakdown:")
+        for error, count in translation_stats['error_types'].items():
+            print(f"  {error}: {count}")
+    
     random.shuffle(all_raw_data)
     return all_raw_data
 

@@ -5,9 +5,10 @@ import os
 import json
 import boto3
 import pandas as pd
-from datasets import load_dataset, DatasetDict
-# from sklearn.model_selection import train_test_split as sk_train_test_split # Not used, can remove
+from datasets import Dataset, DatasetDict
+from sklearn.model_selection import train_test_split
 import mlflow
+import re
 
 # --- Configuration ---
 SYSTEM_MESSAGE = """You are Llama, an AI assistant. Your knowledge spans a wide range of topics, allowing you to answer questions with honesty and truthfulness."""
@@ -17,16 +18,31 @@ DEFAULT_TEST_SPLIT_FRACTION = 0.15
 DEFAULT_VALIDATION_FROM_TRAIN_FRACTION = 0.15
 
 # --- Helper Functions ---
+
+def clean_job_description_text(text):
+    """Clean job description text by removing any translation markers"""
+    if not isinstance(text, str):
+        return str(text)
+    
+    # Remove translation error markers (safety measure)
+    cleaned = re.sub(r'\[[A-Z]{2,}_(?:UNTRANSLATED|NO_TRANSLATE_CLIENT|FAILED_\w+|ERROR)\]', '', text)
+    cleaned = re.sub(r'\[[A-Z_]+\]', '', cleaned)  # Remove any other bracketed markers
+    cleaned = ' '.join(cleaned.split())  # Clean up whitespace
+    return cleaned
+    
 def create_conversation_format(sample, job_desc_col, category_col):
     """
-    Formats a raw data sample into the initial messages list for fine-tuning.
-    (System message will be added later by 'add_system_message_to_conversation')
+    Formats a raw data sample into messages list for fine-tuning.
+    SIMPLIFIED: Only user and assistant messages, no system message.
     """
     jd_text = sample[job_desc_col]
     category = sample[category_col]
 
+    # Clean the text (safety measure)
+    cleaned_jd_text = clean_job_description_text(jd_text)
+
     # The prompt for the LLM
-    user_prompt = f"Classify the following job description. Job Description: {jd_text}"
+    user_prompt = f"Classify the following job description. Job Description: {cleaned_jd_text}"
 
     return {
         "messages": [
@@ -35,15 +51,60 @@ def create_conversation_format(sample, job_desc_col, category_col):
         ]
     }
 
-def add_system_message_to_conversation(sample):
+def load_data_as_pandas(raw_dataset_identifier: str):
     """
-    Prepends the system message to the conversation if not already present.
+    Load data using pandas instead of HuggingFace datasets to avoid session issues.
     """
-    if sample["messages"] and sample["messages"][0]["role"] == "system":
-        return sample # System message already exists
+    print(f"Loading data using pandas from: {raw_dataset_identifier}")
+    
+    if raw_dataset_identifier.startswith("s3://"):
+        # Parse S3 URI
+        s3_path = raw_dataset_identifier.replace("s3://", "")
+        bucket, key = s3_path.split("/", 1)
+        
+        # Download from S3 to local temp file
+        s3_client = boto3.client("s3")
+        local_temp_file = "/tmp/raw_data.jsonl"
+        
+        print(f"Downloading from S3: bucket={bucket}, key={key}")
+        s3_client.download_file(bucket, key, local_temp_file)
+        
+        # Read the downloaded file
+        if local_temp_file.endswith('.jsonl') or local_temp_file.endswith('.json'):
+            df = pd.read_json(local_temp_file, lines=True)
+        elif local_temp_file.endswith('.csv'):
+            df = pd.read_csv(local_temp_file)
+        else:
+            # Try JSON lines first, then regular JSON
+            try:
+                df = pd.read_json(local_temp_file, lines=True)
+            except:
+                df = pd.read_json(local_temp_file)
+        
+        # Clean up temp file
+        os.remove(local_temp_file)
+        
+    elif os.path.exists(raw_dataset_identifier):
+        # Local file
+        if raw_dataset_identifier.endswith('.jsonl'):
+            df = pd.read_json(raw_dataset_identifier, lines=True)
+        elif raw_dataset_identifier.endswith('.csv'):
+            df = pd.read_csv(raw_dataset_identifier)
+        else:
+            df = pd.read_json(raw_dataset_identifier)
     else:
-        sample["messages"] = [{"role": "system", "content": SYSTEM_MESSAGE}] + sample["messages"]
-        return sample
+        # Try to load as HuggingFace dataset name (fallback)
+        # This might still cause issues, but worth trying
+        try:
+            from datasets import load_dataset
+            hf_dataset = load_dataset(raw_dataset_identifier)
+            df = hf_dataset['train'].to_pandas()
+        except Exception as e:
+            raise ValueError(f"Could not load dataset from {raw_dataset_identifier}. Error: {e}")
+    
+    print(f"Loaded dataframe with shape: {df.shape}")
+    print(f"Columns: {list(df.columns)}")
+    return df
 
 def preprocess_job_data(
     raw_dataset_identifier: str,
@@ -66,8 +127,6 @@ def preprocess_job_data(
     print(f"Output S3 Location: s3://{s3_output_bucket}/{s3_output_prefix}")
 
     # --- MLflow Setup ---
-    # Set tracking URI and experiment name if provided
-    # This setup is done before starting a run, similar to preprocess_llama3.py
     if mlflow_arn:
         mlflow.set_tracking_uri(mlflow_arn)
         print(f"MLflow tracking URI set to: {mlflow_arn}")
@@ -75,85 +134,66 @@ def preprocess_job_data(
         mlflow.set_experiment(experiment_name)
         print(f"MLflow experiment set to: {experiment_name}")
 
-    mlflow_run_id = None # Initialize mlflow_run_id
+    mlflow_run_id = None
 
-    print(f"Loading raw dataset from: {raw_dataset_identifier}")
+    # --- Load data using pandas ---
     try:
-        if raw_dataset_identifier.startswith("s3://"):
-            print(f"Attempting to load from S3 path: {raw_dataset_identifier} as JSONL.")
-            # Assuming a single JSONL file. For more complex structures, adjust data_files.
-            raw_hf_dataset = load_dataset("json", data_files={"train": raw_dataset_identifier}, split="train")
-            raw_hf_dataset = DatasetDict({"train": raw_hf_dataset}) # Ensure DatasetDict structure
-        else:
-            raw_hf_dataset = load_dataset(raw_dataset_identifier)
+        df = load_data_as_pandas(raw_dataset_identifier)
     except Exception as e:
         print(f"Error loading dataset '{raw_dataset_identifier}': {e}")
         raise
 
-    # --- Ensure standard splits (train, validation, test) ---
+    # Check if required columns exist
+    if job_desc_column not in df.columns:
+        raise ValueError(f"Column '{job_desc_column}' not found. Available columns: {list(df.columns)}")
+    if category_column not in df.columns:
+        raise ValueError(f"Column '{category_column}' not found. Available columns: {list(df.columns)}")
+
+    # --- Create train/validation/test splits using pandas ---
+    print("Creating train/validation/test splits...")
+    
+    # First split: separate test set
+    train_val_df, test_df = train_test_split(
+        df, 
+        test_size=test_split_fraction, 
+        random_state=42, 
+        stratify=df[category_column] if len(df[category_column].unique()) > 1 else None
+    )
+    
+    # Second split: separate validation from training
+    train_df, val_df = train_test_split(
+        train_val_df, 
+        test_size=validation_from_train_fraction, 
+        random_state=42,
+        stratify=train_val_df[category_column] if len(train_val_df[category_column].unique()) > 1 else None
+    )
+    
+    # Apply max_samples_per_split if specified
+    if max_samples_per_split:
+        train_df = train_df.head(max_samples_per_split)
+        val_df = val_df.head(max_samples_per_split)
+        test_df = test_df.head(max_samples_per_split)
+    
+    print(f"Split sizes - Train: {len(train_df)}, Validation: {len(val_df)}, Test: {len(test_df)}")
+
+    # --- Convert pandas dataframes to HuggingFace datasets and format ---
     processed_splits = {}
-    if "train" not in raw_hf_dataset:
-        raise ValueError("Raw dataset must contain at least a 'train' split.")
-
-    temp_train_data = raw_hf_dataset["train"]
-
-    # Create test split if not present
-    if "test" in raw_hf_dataset:
-        processed_splits["test"] = raw_hf_dataset["test"]
-    else:
-        print(f"No 'test' split found. Creating one from 'train' with fraction: {test_split_fraction}")
-        split_output = temp_train_data.train_test_split(test_size=test_split_fraction, shuffle=True, seed=42)
-        temp_train_data = split_output["train"] # Update temp_train_data
-        processed_splits["test"] = split_output["test"]
-
-    # Create validation split from (remaining) train data if not present
-    if "validation" in raw_hf_dataset:
-        processed_splits["validation"] = raw_hf_dataset["validation"]
-        processed_splits["train"] = temp_train_data # Use the (potentially reduced by test split) train data
-    else:
-        print(f"No 'validation' split found. Creating one from remaining 'train' data with fraction: {validation_from_train_fraction}")
-        # Ensure validation_from_train_fraction is applied to the current temp_train_data size
-        if len(temp_train_data) * validation_from_train_fraction < 1:
-             raise ValueError(f"Train data size ({len(temp_train_data)}) is too small to create a validation split with fraction {validation_from_train_fraction}.")
-        split_output = temp_train_data.train_test_split(test_size=validation_from_train_fraction, shuffle=True, seed=42)
-        processed_splits["train"] = split_output["train"]
-        processed_splits["validation"] = split_output["test"] # 'test' from this split becomes our validation
-
-    # --- Apply formatting and system message ---
-    print("Formatting data and adding system messages...")
-    for split_name in ["train", "validation", "test"]:
-        if split_name not in processed_splits:
-            print(f"Warning: Expected split '{split_name}' not found after processing. Skipping.")
-            continue
+    
+    for split_name, split_df in [("train", train_df), ("validation", val_df), ("test", test_df)]:
+        # Convert to HuggingFace Dataset
+        hf_dataset = Dataset.from_pandas(split_df, preserve_index=False)
         
-        hf_split_data = processed_splits[split_name]
+        # Apply conversation formatting
+        formatted_dataset = hf_dataset.map(
+            lambda x: create_conversation_format(x, job_desc_column, category_column),
+            remove_columns=[col for col in hf_dataset.column_names if col not in ["messages"]]
+        ) 
         
-        # Check if required columns exist before mapping
-        if job_desc_column not in hf_split_data.column_names or \
-           category_column not in hf_split_data.column_names:
-            raise ValueError(
-                f"Required columns '{job_desc_column}' or '{category_column}' not found in '{split_name}' split. "
-                f"Available columns: {hf_split_data.column_names}"
-            )
-
-        # 1. Create user/assistant messages
-        formatted_split = hf_split_data.map(
-            create_conversation_format,
-            fn_kwargs={"job_desc_col": job_desc_column, "category_col": category_column},
-            remove_columns=[col for col in hf_split_data.column_names if col not in ["messages"]]
-        )
-        # 2. Add system message
-        formatted_split = formatted_split.map(add_system_message_to_conversation)
-        # 3. Filter for valid conversation structure
-        formatted_split = formatted_split.filter(lambda x: len(x["messages"][1:]) % 2 == 0)
-
-        # 4. (Optional) Sub-sample
-        if max_samples_per_split and len(formatted_split) > max_samples_per_split:
-            print(f"Sub-sampling '{split_name}' split to {max_samples_per_split} samples.")
-            formatted_split = formatted_split.select(range(max_samples_per_split))
-
-        processed_splits[split_name] = formatted_split
-        print(f"Processed '{split_name}' split with {len(formatted_split)} samples.")
+        # Filter for valid conversation structure
+        formatted_dataset = formatted_dataset.filter(lambda x: len(x["messages"]) == 2)
+        
+        processed_splits[split_name] = formatted_dataset
+        print(f"Processed '{split_name}' split with {len(formatted_dataset)} samples.")
 
     # --- Collect unique categories from training data ---
     all_categories = set()
@@ -168,13 +208,14 @@ def preprocess_job_data(
     # --- Save to local JSONL and upload to S3 ---
     s3_client = boto3.client("s3")
     output_s3_paths = {}
-    local_base_dir = "/tmp/processed_data_jd" # Use a unique temp dir name
+    local_base_dir = "/tmp/processed_data_jd"
     os.makedirs(local_base_dir, exist_ok=True)
 
     for split_name, data_to_save in processed_splits.items():
-        if not data_to_save: # Skip if a split is empty after processing
-            print(f"Split '{split_name}' is empty or was not processed. Skipping save and upload.")
+        if not data_to_save:
+            print(f"Split '{split_name}' is empty. Skipping save and upload.")
             continue
+            
         local_file_path = os.path.join(local_base_dir, f"{split_name}_dataset.jsonl")
         s3_key = f"{s3_output_prefix}/{split_name}/{split_name}_dataset.jsonl"
 
@@ -194,11 +235,8 @@ def preprocess_job_data(
         output_s3_paths["categories"] = f"s3://{s3_output_bucket}/{s3_categories_key}"
         print(f"Uploaded categories list to {output_s3_paths['categories']}")
         os.remove(local_categories_file)
-    else:
-        print("No categories found to save.")
 
     # --- MLflow Logging ---
-    # Start a run if mlflow_arn, experiment_name, AND run_name are provided
     if mlflow_arn and experiment_name and run_name:
         with mlflow.start_run(run_name=run_name) as run:
             mlflow_run_id = run.info.run_id
@@ -214,48 +252,37 @@ def preprocess_job_data(
             if max_samples_per_split:
                 mlflow.log_param("max_samples_per_split", max_samples_per_split)
 
-            # Log metrics (sample counts) and S3 paths for datasets
+            # Log metrics and paths
             for split_name, path in output_s3_paths.items():
-                if split_name != "categories": # Categories path is logged separately
+                if split_name != "categories":
                     mlflow.log_param(f"{split_name}_output_s3_path", path)
                     if split_name in processed_splits and processed_splits[split_name]:
-                         mlflow.log_metric(f"{split_name}_sample_count", len(processed_splits[split_name]))
-                    # Log S3 path as a text artifact for easier access from MLflow UI
+                        mlflow.log_metric(f"{split_name}_sample_count", len(processed_splits[split_name]))
                     mlflow.log_text(path, artifact_file=f"output_paths/{split_name}_dataset_s3_path.txt")
 
             mlflow.log_metric("num_unique_categories", len(poc_categories_list))
             if "categories" in output_s3_paths:
                 mlflow.log_param("categories_output_s3_path", output_s3_paths["categories"])
-                mlflow.log_artifact(local_categories_file, artifact_path="metadata") # Or log the s3 path as text
             
-            # Log all output paths as a dictionary artifact
+            # Log output paths and categories
             mlflow.log_dict(output_s3_paths, "output_s3_paths.json")
-            # Log processed categories list as an artifact
             if poc_categories_list:
-                 # Create a temporary local file for poc_categories_list to log as artifact
                 temp_cat_list_file = os.path.join(local_base_dir, "processed_categories_list.json")
                 with open(temp_cat_list_file, 'w') as f_cat_list:
                     json.dump(poc_categories_list, f_cat_list)
                 mlflow.log_artifact(temp_cat_list_file, artifact_path="metadata")
                 os.remove(temp_cat_list_file)
 
-    elif not (mlflow_arn and experiment_name):
-        print("MLflow tracking URI or experiment name not provided. Skipping MLflow run creation and logging.")
-    elif not run_name:
-        print("MLflow run_name not provided. Skipping MLflow run creation and logging.")
-
-    # Clean up local temporary directory
+    # Clean up
     if os.path.exists(local_base_dir):
-        for f_name in os.listdir(local_base_dir): # Ensure it's empty before rmdir if files were not removed
+        for f_name in os.listdir(local_base_dir):
             try:
                 os.remove(os.path.join(local_base_dir, f_name))
             except OSError:
-                pass # ignore if file already removed
+                pass
         os.rmdir(local_base_dir)
 
     # --- Prepare return dictionary ---
-    # Ensure consistent keys for pipeline steps if needed, e.g., 'training_input_path'
-    # For now, using descriptive keys based on splits.
     final_return_paths = {
         "train_data_s3_path": output_s3_paths.get("train"),
         "validation_data_s3_path": output_s3_paths.get("validation"),
@@ -263,9 +290,7 @@ def preprocess_job_data(
         "categories_s3_path": output_s3_paths.get("categories"),
         "mlflow_run_id": mlflow_run_id
     }
-    # Filter out None paths if splits were not created/saved
     final_return_paths = {k: v for k, v in final_return_paths.items() if v is not None or k == "mlflow_run_id"}
-
 
     print(f"Preprocessing function finished. Returning: {final_return_paths}")
     return final_return_paths
@@ -274,31 +299,29 @@ def preprocess_job_data(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess job description data for LLM fine-tuning.")
     parser.add_argument("--raw_dataset_identifier", type=str, required=True,
-                        help="Identifier for the raw dataset (e.g., Hugging Face Hub ID, S3 URI to a JSONL file, or local path).")
+                        help="Identifier for the raw dataset (e.g., S3 URI to a JSONL file, or local path).")
     parser.add_argument("--s3_output_bucket", type=str, required=True,
                         help="S3 bucket to upload processed data.")
     parser.add_argument("--s3_output_prefix", type=str, required=True,
-                        help="S3 prefix for the processed data within the bucket (e.g., 'processed_data/job_descriptions').")
+                        help="S3 prefix for the processed data within the bucket.")
     parser.add_argument("--job_desc_column", type=str, default=DEFAULT_JOB_DESC_COLUMN,
                         help=f"Column name for job description text. Default: {DEFAULT_JOB_DESC_COLUMN}")
     parser.add_argument("--category_column", type=str, default=DEFAULT_CATEGORY_COLUMN,
                         help=f"Column name for category label. Default: {DEFAULT_CATEGORY_COLUMN}")
     parser.add_argument("--test_split_fraction", type=float, default=DEFAULT_TEST_SPLIT_FRACTION,
-                        help=f"Fraction of data to use for the test set if not present. Default: {DEFAULT_TEST_SPLIT_FRACTION}")
+                        help=f"Fraction of data to use for the test set. Default: {DEFAULT_TEST_SPLIT_FRACTION}")
     parser.add_argument("--validation_from_train_fraction", type=float, default=DEFAULT_VALIDATION_FROM_TRAIN_FRACTION,
-                        help=f"Fraction of training data to use for validation set if not present. Default: {DEFAULT_VALIDATION_FROM_TRAIN_FRACTION}")
+                        help=f"Fraction of training data to use for validation set. Default: {DEFAULT_VALIDATION_FROM_TRAIN_FRACTION}")
     parser.add_argument("--max_samples_per_split", type=int, default=None,
-                        help="Maximum number of samples to keep per split (for quick testing). Default: None (no limit).")
+                        help="Maximum number of samples to keep per split. Default: None")
     parser.add_argument("--mlflow_arn", type=str, default=os.environ.get("MLFLOW_TRACKING_URI"),
-                        help="MLflow tracking server ARN. Defaults to MLFLOW_TRACKING_URI env variable.")
+                        help="MLflow tracking server ARN.")
     parser.add_argument("--experiment_name", type=str, default="job-desc-classification-preprocess",
-                        help="MLflow experiment name. Default: 'job-desc-classification-preprocess'")
+                        help="MLflow experiment name.")
     parser.add_argument("--run_name", type=str, default="preprocess-job-data-standalone",
-                        help="MLflow run name. Default: 'preprocess-job-data-standalone'")
+                        help="MLflow run name.")
 
     args = parser.parse_args()
-
-    print(f"Starting preprocessing script with CLI args: {vars(args)}")
 
     returned_info = preprocess_job_data(
         raw_dataset_identifier=args.raw_dataset_identifier,
@@ -313,4 +336,4 @@ if __name__ == "__main__":
         experiment_name=args.experiment_name,
         run_name=args.run_name,
     )
-    print(f"Preprocessing script execution complete. Output info: {returned_info}")
+    print(f"Preprocessing complete. Output: {returned_info}")
